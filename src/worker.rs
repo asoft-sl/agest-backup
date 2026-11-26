@@ -66,6 +66,8 @@ pub struct Shared {
     pub disk: Option<(u64, u64)>,
     pub notices: Vec<Notice>,
     pub last_attempt: HashMap<i64, DateTime<Local>>,
+    /// Última copia fallida (tienda y hora), hasta que una copia de esa tienda salga bien.
+    pub last_failure: Option<(i64, String, DateTime<Local>)>,
 }
 
 impl Shared {
@@ -436,6 +438,9 @@ fn job_loop(
         s.current = None;
         match result {
             Ok(entry) => {
+                if s.last_failure.as_ref().is_some_and(|f| f.0 == job.shop_id) {
+                    s.last_failure = None;
+                }
                 s.index.add(entry.clone());
                 let keep = s.schedule_for(job.shop_id).retention_count;
                 let pruned = prune(&api, &dir, &mut s.index, job.shop_id, keep);
@@ -463,6 +468,7 @@ fn job_loop(
                 if is_auth_error(&e) {
                     s.auth_lost = Some(e.to_string());
                 } else {
+                    s.last_failure = Some((job.shop_id, shop_name.clone(), Local::now()));
                     s.notify(format!("La copia de «{shop_name}» ha fallado: {e}"), false);
                 }
             }

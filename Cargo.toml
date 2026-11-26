@@ -1,6 +1,6 @@
 [package]
 name = "agest-backup"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "AGest Backup: copias de seguridad de las tiendas de AGest en tu propio equipo"
 authors = ["ASoft SL"]
@@ -19,6 +19,7 @@ fs2 = "0.4"
 getrandom = "0.3"
 hostname = "0.4"
 open = "5"
+raw-window-handle = "0.6"
 os_info = { version = "3", default-features = false }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "default-tls"] }
 rfd = "0.15"
@@ -29,7 +30,7 @@ tiny_http = "0.12"
 tray-icon = "0.21"
 urlencoding = "2"
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_System_Console"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Console", "Win32_UI_WindowsAndMessaging"] }
 
 [dependencies.keyring]
 version = "3"

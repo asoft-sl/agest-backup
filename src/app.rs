@@ -205,18 +205,20 @@ fn same_schedule(a: &Schedule, b: &Schedule) -> bool {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, start_hidden: bool) -> Self {
         theme::apply(&cc.egui_ctx);
-        let config = Config::load();
-        let tray = crate::tray::create(&cc.egui_ctx);
+        let config = Arc::new(Mutex::new(Config::load()));
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        let tray = crate::tray::create(cc, shared.clone(), config.clone());
         if start_hidden && tray.is_none() {
             cc.egui_ctx
                 .send_viewport_cmd(egui::ViewportCommand::Visible(true));
         }
-        let server_input = config.api_base.clone();
-        let token = TokenStore::load(&config.api_base);
+        let api_base = config.lock().unwrap().api_base.clone();
+        let server_input = api_base.clone();
+        let token = TokenStore::load(&api_base);
 
         let mut app = Self {
-            config: Arc::new(Mutex::new(config)),
-            shared: Arc::new(Mutex::new(Shared::default())),
+            config,
+            shared,
             api: None,
             worker: None,
             tab: Tab::Home,
@@ -1228,6 +1230,7 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_login(ctx);
         self.handle_close(ctx);
+        crate::tray::refresh();
 
         let lost = self.shared.lock().unwrap().auth_lost.take();
         if let Some(message) = lost {
@@ -1313,18 +1316,21 @@ fn nav_item(ui: &mut Ui, selected: bool, icon: &str, label: &str) -> egui::Respo
     response
 }
 
-/// Logotipo: cuadrado del color primario con el símbolo de copia.
+/// Logotipo: las uvas de ASoft en el color del texto (blancas en el tema oscuro).
 fn logo(ui: &mut Ui, size: f32) {
-    let p = palette(ui);
+    let color = ui.visuals().strong_text_color();
     let (rect, _) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same((size * 0.22) as u8), p.primary);
-    let c = rect.center();
-    ui.painter().circle_stroke(
-        c,
-        size * 0.26,
-        Stroke::new(size * 0.08, p.primary_foreground),
-    );
-    ui.painter()
-        .circle_filled(c, size * 0.07, p.primary_foreground);
+    // Coordenadas del logo (lienzo de 1000×1000; las uvas van de y=158 a y=812).
+    let k = size / 654.0;
+    let at = |x: f32, y: f32| rect.center() + vec2((x - 500.0) * k, (y - 485.0) * k);
+    let painter = ui.painter();
+    for (x, y) in crate::GRAPES {
+        painter.circle_filled(at(x, y), crate::GRAPE_R * k, color);
+    }
+    painter.add(egui::epaint::QuadraticBezierShape::from_points_stroke(
+        [at(498.0, 312.0), at(506.0, 215.0), at(562.0, 168.0)],
+        false,
+        Color32::TRANSPARENT,
+        Stroke::new(48.0 * k, color),
+    ));
 }

@@ -449,7 +449,25 @@ pub fn stat(ui: &mut Ui, label: &str, value: &str, hint: &str, tone: Tone) {
             ui.label(RichText::new("●").size(10.0).color(fg));
             ui.label(small_muted(ui, label));
         });
-        ui.label(RichText::new(value).family(semibold()).size(20.0));
+        // Una sola línea: si no cabe, se reduce la letra (si egui la partiera,
+        // justificaría la primera línea y separaría las letras).
+        let width = ui.available_width();
+        let size = [20.0, 18.0, 16.0, 14.0]
+            .into_iter()
+            .find(|&size| {
+                let font = egui::FontId::new(size, semibold());
+                let w = ui.fonts(|f| {
+                    f.layout_no_wrap(value.to_string(), font, Color32::WHITE)
+                        .size()
+                        .x
+                });
+                w <= width
+            })
+            .unwrap_or(14.0);
+        ui.add(
+            egui::Label::new(RichText::new(value).family(semibold()).size(size))
+                .wrap_mode(egui::TextWrapMode::Truncate),
+        );
         // siempre una línea de pista, para que las tarjetas midan lo mismo
         ui.label(small_muted(ui, if hint.is_empty() { " " } else { hint }));
     });
