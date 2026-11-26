@@ -1,0 +1,45 @@
+[package]
+name = "agest-backup"
+version = "0.1.0"
+edition = "2024"
+description = "AGest Backup: copias de seguridad de las tiendas de AGest en tu propio equipo"
+authors = ["ASoft SL"]
+license = "Proprietary"
+publish = false
+
+[dependencies]
+anyhow = "1"
+auto-launch = "0.5"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+directories = "6"
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "persistence"] }
+egui = "0.31"
+fs2 = "0.4"
+getrandom = "0.3"
+hostname = "0.4"
+open = "5"
+os_info = { version = "3", default-features = false }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "default-tls"] }
+rfd = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tiny_http = "0.12"
+tray-icon = "0.21"
+urlencoding = "2"
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Console"] }
+
+[dependencies.keyring]
+version = "3"
+features = ["windows-native", "apple-native", "sync-secret-service"]
+
+[dev-dependencies]
+tempfile = "3"
+
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
