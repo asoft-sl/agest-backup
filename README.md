@@ -8,6 +8,8 @@ Aplicación de escritorio que guarda **copias de seguridad de las tiendas de [AG
 - Desde el panel web (*Configuración → Copias de seguridad*) se ven los equipos, el espacio libre en disco y el historial, y también se pueden programar y pedir copias.
 - Funciona en segundo plano desde la bandeja del sistema y puede arrancar con el equipo.
 
+**[⬇ Descargar la última versión para Windows](https://github.com/asoft-sl/agest-backup/releases/latest/download/agest-backup.exe)** · [Todas las versiones](https://github.com/asoft-sl/agest-backup/releases)
+
 Está hecha en Rust con [egui](https://github.com/emilk/egui) y la misma paleta que el panel web de AGest.
 
 ## Requisitos
@@ -18,7 +20,7 @@ Está hecha en Rust con [egui](https://github.com/emilk/egui) y la misma paleta 
 
 ## Instalación y uso
 
-1. Descarga o compila `agest-backup.exe` (ver más abajo) y ábrelo.
+1. [Descarga `agest-backup.exe`](https://github.com/asoft-sl/agest-backup/releases/latest/download/agest-backup.exe) (o compílalo, ver más abajo) y ábrelo. No necesita instalación.
 2. Pulsa **Iniciar sesión con AGest**. Se abre el navegador: inicia sesión si te lo pide y pulsa **Autorizar**.
 3. Elige la **carpeta** donde guardar las copias. Dentro se crea una subcarpeta por tienda.
 4. En **Programación**, activa cada tienda y elige cuándo copiarla. También puedes hacerlo desde el panel web: los cambios se sincronizan.
