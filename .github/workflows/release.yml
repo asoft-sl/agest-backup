@@ -1,0 +1,93 @@
+name: Release
+
+# Compila agest-backup.exe en Windows y publica la release con su SHA-256.
+# Se lanza a mano (Actions → Release → Run workflow) o al subir un tag v*.
+# La versión sale de Cargo.toml; las notas, de .github/releases/v<versión>.md.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Versión
+        id: version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          tag="v$version"
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "$tag" ]]; then
+            echo "::error::El tag $GITHUB_REF_NAME no coincide con la versión de Cargo.toml ($version)"
+            exit 1
+          fi
+          notes=".github/releases/$tag.md"
+          if [[ ! -f "$notes" ]]; then
+            echo "::error::Faltan las notas de la versión en $notes"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "notes=$notes" >> "$GITHUB_OUTPUT"
+
+      - name: Comprobar que la release no existe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "::error::La release ${{ steps.version.outputs.tag }} ya existe. Sube la versión en Cargo.toml."
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tests
+        run: cargo test --release
+
+      - name: Compilar
+        run: cargo build --release
+
+      - name: Preparar ficheros
+        id: files
+        run: |
+          mkdir dist
+          cp target/release/agest-backup.exe dist/
+          cd dist
+          sha256sum agest-backup.exe > agest-backup.exe.sha256
+          cat agest-backup.exe.sha256
+          hash=$(cut -d' ' -f1 agest-backup.exe.sha256)
+          {
+            sed '/^## Verificación/,$d' "../${{ steps.version.outputs.notes }}"
+            echo '## Verificación'
+            echo
+            echo '```'
+            echo "SHA-256  $hash  agest-backup.exe"
+            echo '```'
+            echo
+            echo 'Requisitos: Windows 10/11 y una cuenta de AGest con suscripción activa.'
+          } > notes.md
+
+      - name: Publicar
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            dist/agest-backup.exe dist/agest-backup.exe.sha256 \
+            --target "$GITHUB_SHA" \
+            --title "AGest Backup ${{ steps.version.outputs.version }}" \
+            --notes-file dist/notes.md
