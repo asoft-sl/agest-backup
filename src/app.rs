@@ -58,6 +58,8 @@ pub struct App {
     confirm_logout: bool,
     settings_error: Option<String>,
     hid_once: bool,
+    history_filter: HistoryFilter,
+    history_shop: Option<i64>,
 }
 
 /// Lo que la interfaz necesita del estado compartido, copiado una vez por fotograma.
@@ -235,6 +237,8 @@ impl App {
             confirm_logout: false,
             settings_error: None,
             hid_once: false,
+            history_filter: HistoryFilter::All,
+            history_shop: None,
         };
         if let Some(token) = token {
             app.start_session(token, &cc.egui_ctx);
@@ -1015,68 +1019,189 @@ impl App {
                 }
             });
         });
-        card(ui, |ui| {
-            if view.runs.is_empty() {
-                ui.label(muted(ui, "Todavía no hay copias."));
-                return;
+
+        if view.runs.is_empty() {
+            card(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(18.0);
+                    ui.label(
+                        RichText::new("🕘")
+                            .size(30.0)
+                            .color(palette(ui).muted_foreground),
+                    );
+                    ui.label(theme::title("Todavía no hay copias"));
+                    ui.label(muted(
+                        ui,
+                        "Cuando se haga la primera copia de una tienda aparecerá aquí.",
+                    ));
+                    ui.add_space(18.0);
+                });
+            });
+            return;
+        }
+
+        // --- Resumen ---
+        let completed = view.runs.iter().filter(|r| r.status == "completed").count();
+        let failed = view.runs.iter().filter(|r| r.status == "failed").count();
+        let active = view.runs.iter().filter(|r| is_active(&r.status)).count();
+        let total_bytes: u64 = view
+            .runs
+            .iter()
+            .filter(|r| r.status == "completed")
+            .filter_map(|r| r.size_bytes)
+            .sum();
+        let last_ok = view
+            .runs
+            .iter()
+            .filter(|r| r.status == "completed")
+            .filter_map(run_time)
+            .max();
+        ui.columns(4, |cols| {
+            theme::stat(
+                &mut cols[0],
+                "Completadas",
+                &completed.to_string(),
+                &format!("de {} copias", view.runs.len()),
+                Tone::Success,
+            );
+            theme::stat(
+                &mut cols[1],
+                "Fallidas",
+                &failed.to_string(),
+                if failed > 0 {
+                    "el motivo aparece en cada copia"
+                } else {
+                    ""
+                },
+                if failed > 0 {
+                    Tone::Danger
+                } else {
+                    Tone::Neutral
+                },
+            );
+            theme::stat(
+                &mut cols[2],
+                "Última correcta",
+                &last_ok.map(relative).unwrap_or_else(|| "Ninguna".into()),
+                &last_ok.map(format_dt).unwrap_or_default(),
+                Tone::Info,
+            );
+            theme::stat(
+                &mut cols[3],
+                "Volumen copiado",
+                &human_bytes(total_bytes),
+                if active > 0 {
+                    "hay copias en curso"
+                } else {
+                    ""
+                },
+                Tone::Neutral,
+            );
+        });
+        ui.add_space(8.0);
+
+        // --- Filtros ---
+        ui.horizontal(|ui| {
+            for (filter, label, count) in [
+                (HistoryFilter::All, "Todas", view.runs.len()),
+                (HistoryFilter::Completed, "Completadas", completed),
+                (
+                    HistoryFilter::Failed,
+                    "Con problemas",
+                    view.runs.len() - completed - active,
+                ),
+                (HistoryFilter::Active, "En curso", active),
+            ] {
+                if chip(ui, self.history_filter == filter, label, count).clicked() {
+                    self.history_filter = filter;
+                }
             }
-            egui::Grid::new("runs")
-                .num_columns(7)
-                .striped(true)
-                .spacing([18.0, 10.0])
-                .min_col_width(60.0)
-                .show(ui, |ui| {
-                    for h in [
-                        "Fecha",
-                        "Tienda",
-                        "Estado",
-                        "Origen",
-                        "Tamaño",
-                        "Duración",
-                        "En el equipo",
-                    ] {
-                        ui.label(small_muted(ui, h));
-                    }
-                    ui.end_row();
-                    for run in &view.runs {
-                        let when =
-                            parse_rfc3339(run.finished_at.as_deref().or(run.created_at.as_deref()));
-                        ui.label(when.map(format_dt).unwrap_or_else(|| "—".into()));
-                        ui.label(
-                            run.shop_name
-                                .clone()
-                                .unwrap_or_else(|| format!("#{}", run.shop_id)),
-                        );
-                        let (tone, label) = status_tone(&run.status);
-                        let r = badge(ui, tone, label);
-                        if let Some(err) = &run.error {
-                            r.on_hover_text(err);
-                        }
-                        ui.label(trigger_label(&run.trigger));
-                        ui.label(
-                            run.size_bytes
-                                .map(human_bytes)
-                                .unwrap_or_else(|| "—".into()),
-                        );
-                        let duration = run.duration_seconds.map(|s| {
-                            if s < 60 {
-                                format!("{s} s")
-                            } else {
-                                format!("{} min", s / 60)
+            if view.shops.len() > 1 {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let current = self
+                        .history_shop
+                        .and_then(|id| view.shops.iter().find(|(s, _)| *s == id))
+                        .map(|(_, n)| n.clone())
+                        .unwrap_or_else(|| "Todas las tiendas".into());
+                    egui::ComboBox::from_id_salt("history_shop")
+                        .selected_text(current)
+                        .width(200.0)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.history_shop, None, "Todas las tiendas");
+                            for (id, name) in &view.shops {
+                                ui.selectable_value(&mut self.history_shop, Some(*id), name);
                             }
                         });
-                        ui.label(duration.unwrap_or_else(|| "—".into()));
-                        if view.local_runs.contains(&run.id) {
-                            ui.label(RichText::new("✔").color(palette(ui).success));
-                        } else if run.pruned_at.is_some() {
-                            ui.label(small_muted(ui, "Borrada"));
-                        } else {
-                            ui.label(small_muted(ui, "—"));
-                        }
-                        ui.end_row();
-                    }
                 });
+            }
         });
+        ui.add_space(8.0);
+
+        let filter = self.history_filter;
+        let shop = self.history_shop;
+        let runs: Vec<&Run> = view
+            .runs
+            .iter()
+            .filter(|r| shop.is_none_or(|id| r.shop_id == id))
+            .filter(|r| match filter {
+                HistoryFilter::All => true,
+                HistoryFilter::Completed => r.status == "completed",
+                HistoryFilter::Failed => r.status != "completed" && !is_active(&r.status),
+                HistoryFilter::Active => is_active(&r.status),
+            })
+            .collect();
+
+        if runs.is_empty() {
+            card(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(10.0);
+                    ui.label(muted(ui, "No hay copias con estos filtros."));
+                    ui.add_space(10.0);
+                });
+            });
+            return;
+        }
+
+        // --- Lista agrupada por día ---
+        let today = Local::now().date_naive();
+        let mut i = 0;
+        while i < runs.len() {
+            let day = run_time(runs[i]).map(|t| t.date_naive());
+            let mut j = i + 1;
+            while j < runs.len() && run_time(runs[j]).map(|t| t.date_naive()) == day {
+                j += 1;
+            }
+            let heading = match day {
+                Some(d) if d == today => "Hoy".to_string(),
+                Some(d) if Some(d) == today.pred_opt() => "Ayer".to_string(),
+                Some(d) => day_label(d),
+                None => "Sin fecha".to_string(),
+            };
+            ui.horizontal(|ui| {
+                ui.label(theme::strong(heading).size(13.0));
+                ui.label(small_muted(
+                    ui,
+                    if j - i == 1 {
+                        "1 copia".to_string()
+                    } else {
+                        format!("{} copias", j - i)
+                    },
+                ));
+            });
+            ui.add_space(2.0);
+            card(ui, |ui| {
+                for (k, run) in runs[i..j].iter().enumerate() {
+                    if k > 0 {
+                        ui.add_space(2.0);
+                        ui.separator();
+                        ui.add_space(2.0);
+                    }
+                    run_row(ui, run, view.local_runs.contains(&run.id));
+                }
+            });
+            ui.add_space(12.0);
+            i = j;
+        }
     }
 
     fn settings(&mut self, ui: &mut Ui, view: &View) {
@@ -1402,6 +1527,178 @@ impl eframe::App for App {
 }
 
 // --- Piezas sueltas -------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Default)]
+enum HistoryFilter {
+    #[default]
+    All,
+    Completed,
+    Failed,
+    Active,
+}
+
+fn is_active(status: &str) -> bool {
+    matches!(status, "requested" | "building" | "ready" | "downloading")
+}
+
+fn run_time(run: &Run) -> Option<DateTime<Local>> {
+    parse_rfc3339(
+        run.finished_at
+            .as_deref()
+            .or(run.requested_at.as_deref())
+            .or(run.created_at.as_deref()),
+    )
+}
+
+fn day_label(d: chrono::NaiveDate) -> String {
+    use chrono::Datelike;
+    const MONTHS: [&str; 12] = [
+        "enero",
+        "febrero",
+        "marzo",
+        "abril",
+        "mayo",
+        "junio",
+        "julio",
+        "agosto",
+        "septiembre",
+        "octubre",
+        "noviembre",
+        "diciembre",
+    ];
+    let weekday = weekday_name(d.weekday().num_days_from_monday() as u8 + 1);
+    let mut text = format!("{weekday}, {} de {}", d.day(), MONTHS[d.month0() as usize]);
+    if d.year() != Local::now().year() {
+        text.push_str(&format!(" de {}", d.year()));
+    }
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().collect::<String>() + chars.as_str())
+        .unwrap_or_default()
+}
+
+fn format_duration(secs: i64) -> String {
+    match secs {
+        s if s < 60 => format!("{s} s"),
+        s if s < 3600 => format!("{} min {} s", s / 60, s % 60),
+        s => format!("{} h {} min", s / 3600, (s % 3600) / 60),
+    }
+}
+
+/// Botón de filtro tipo «pastilla» con contador.
+fn chip(ui: &mut Ui, selected: bool, label: &str, count: usize) -> egui::Response {
+    let p = palette(ui);
+    let text = format!("{label}  {count}");
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text, theme::semibold_font(13.0), Color32::WHITE);
+    let size = galley.size() + vec2(24.0, 12.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let (fill, fg, stroke) = if selected {
+        (p.primary, p.primary_foreground, Stroke::NONE)
+    } else if response.hovered() {
+        (p.muted, p.foreground, Stroke::new(1.0_f32, p.border))
+    } else {
+        (p.card, p.muted_foreground, Stroke::new(1.0_f32, p.border))
+    };
+    ui.painter().rect_filled(rect, CornerRadius::same(16), fill);
+    ui.painter().rect_stroke(
+        rect,
+        CornerRadius::same(16),
+        stroke,
+        egui::StrokeKind::Inside,
+    );
+    ui.painter()
+        .galley_with_override_text_color(rect.center() - galley.size() / 2.0, galley, fg);
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
+}
+
+/// Una copia del historial: icono de estado, tienda y detalles, y a la derecha hora y estado.
+fn run_row(ui: &mut Ui, run: &Run, local: bool) {
+    let p = palette(ui);
+    let (tone, label) = status_tone(&run.status);
+    let (bg, fg) = theme::tone_colors(p, tone);
+    let icon = match run.status.as_str() {
+        "completed" => "✔",
+        "failed" => "✖",
+        "expired" => "⌛",
+        _ => "⟳",
+    };
+    ui.horizontal(|ui| {
+        // icono de estado
+        let (rect, _) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::hover());
+        ui.painter().circle_filled(rect.center(), 16.0, bg);
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            icon,
+            theme::semibold_font(14.0),
+            fg,
+        );
+
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.label(strong(
+                run.shop_name
+                    .clone()
+                    .unwrap_or_else(|| format!("Tienda #{}", run.shop_id)),
+            ));
+            let mut details = vec![trigger_label(&run.trigger).to_string()];
+            if let Some(size) = run.size_bytes {
+                details.push(human_bytes(size));
+            }
+            if let Some(rows) = run.rows_count {
+                details.push(format!("{rows} registros"));
+            }
+            if let Some(files) = run.files_count.filter(|f| *f > 0) {
+                details.push(format!("{files} ficheros"));
+            } else if !run.include_files {
+                details.push("sin ficheros".into());
+            }
+            if let Some(d) = run.duration_seconds {
+                details.push(format_duration(d));
+            }
+            ui.label(small_muted(ui, details.join(" · ")));
+            if let Some(err) = &run.error {
+                ui.add(
+                    egui::Label::new(RichText::new(err).size(12.0).color(p.danger))
+                        .wrap_mode(egui::TextWrapMode::Wrap),
+                );
+            }
+        });
+
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.vertical(|ui| {
+                ui.with_layout(Layout::top_down(Align::RIGHT), |ui| {
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    let r = badge(ui, tone, label);
+                    if let Some(err) = &run.error {
+                        r.on_hover_text(err);
+                    }
+                    let time = run_time(run)
+                        .map(|t| t.format("%H:%M").to_string())
+                        .unwrap_or_else(|| "—".into());
+                    let place = if local {
+                        RichText::new("● En el equipo").size(12.0).color(p.success)
+                    } else if run.pruned_at.is_some() {
+                        small_muted(ui, "Borrada por retención")
+                    } else {
+                        small_muted(ui, "No está en el equipo")
+                    };
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        ui.label(small_muted(ui, time));
+                        ui.label(place);
+                    });
+                });
+            });
+        });
+    });
+}
 
 fn alert(ui: &mut Ui, tone: Tone, text: &str) {
     let (bg, fg) = theme::tone_colors(palette(ui), tone);
