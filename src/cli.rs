@@ -8,6 +8,7 @@
 //! agest-backup status           tiendas, programación y espacio en disco
 //! agest-backup backup [--shop ID | --due]
 //!                               copia una tienda, las que tocan (--due) o todas
+//! agest-backup update           instala la última versión, si hay una nueva
 //! agest-backup logout           cierra la sesión y desautoriza el equipo
 //! ```
 
@@ -25,7 +26,7 @@ use crate::store::{self, Index};
 use crate::worker::{self, Job, Stage, human_bytes};
 
 pub const COMMANDS: &[&str] = &[
-    "login", "folder", "status", "backup", "logout", "help", "--help",
+    "login", "folder", "status", "backup", "update", "logout", "help", "--help",
 ];
 
 /// En la versión «release» la app no tiene consola propia: se engancha a la
@@ -58,6 +59,7 @@ fn dispatch(args: &[String]) -> Result<()> {
         "folder" => folder(rest),
         "status" => status(),
         "backup" => backup(rest),
+        "update" => self_update(),
         "logout" => logout(),
         _ => {
             println!(
@@ -306,6 +308,22 @@ fn backup(rest: &[String]) -> Result<()> {
     if failed > 0 {
         bail!("{failed} copias han fallado");
     }
+    Ok(())
+}
+
+fn self_update() -> Result<()> {
+    crate::update::init(&[]);
+    println!("Versión instalada: {}", crate::update::CURRENT);
+    let Some(release) = crate::update::check_cli()? else {
+        println!("Ya tienes la última versión.");
+        return Ok(());
+    };
+    println!("Descargando la versión {}…", release.version);
+    crate::update::download_and_install(&release)?;
+    println!(
+        "Instalada la versión {}. Si la app está abierta, sal desde la bandeja y vuelve a abrirla.",
+        release.version
+    );
     Ok(())
 }
 

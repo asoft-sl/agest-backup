@@ -7,6 +7,7 @@ Aplicación de escritorio que guarda **copias de seguridad de las tiendas de [AG
 - Cada copia es un `.zip` con todos los datos de la tienda en JSON y sus ficheros (imágenes, logos, justificantes), verificado con SHA-256.
 - Desde el panel web (*Configuración → Copias de seguridad*) se ven los equipos, el espacio libre en disco y el historial, y también se pueden programar y pedir copias.
 - Funciona en segundo plano desde la bandeja del sistema y puede arrancar con el equipo.
+- Se actualiza sola: descarga las versiones nuevas, comprueba su SHA-256 y las instala cuando no hay copias en curso.
 
 **[⬇ Descargar la última versión para Windows](https://github.com/asoft-sl/agest-backup/releases/latest/download/agest-backup.exe)** · [Todas las versiones](https://github.com/asoft-sl/agest-backup/releases)
 
@@ -26,6 +27,10 @@ Está hecha en Rust con [egui](https://github.com/emilk/egui) y la misma paleta 
 4. En **Programación**, activa cada tienda y elige cuándo copiarla. También puedes hacerlo desde el panel web: los cambios se sincronizan.
 
 Con **Copiar ahora** se hace una copia en el momento. Al cerrar la ventana la app sigue en la bandeja (se puede desactivar en *Ajustes*). Las copias programadas solo se hacen mientras la app está abierta; si el equipo estaba apagado a la hora prevista, la copia se hace en cuanto se enciende.
+
+### Actualizaciones
+
+La app busca una versión nueva al minuto de arrancar y después cada 6 horas. Si la hay, la descarga junto al ejecutable y comprueba su SHA-256. Se instala sola en cuanto la app está en la bandeja y no hay ninguna copia en curso, y vuelve a arrancar en la bandeja. Con la ventana abierta aparece **Reiniciar y actualizar** en la barra lateral y en *Ajustes → Actualizaciones*, donde también se puede buscar a mano o desactivar la actualización automática. Si sales de la app con una versión ya descargada, se instala para el siguiente arranque.
 
 Para dejar de usarla en un equipo, pulsa **Cerrar sesión** en *Ajustes* o desautorízalo desde el panel web. Las copias que ya están en el disco no se borran.
 
@@ -60,6 +65,7 @@ agest-backup folder <ruta>     elige la carpeta de copias
 agest-backup status            tiendas, programación y espacio en disco
 agest-backup backup [--shop ID | --due]
                                copia una tienda, las que tocan (--due) o todas
+agest-backup update            instala la última versión, si hay una nueva
 agest-backup logout            cierra la sesión y desautoriza el equipo
 ```
 
@@ -87,6 +93,7 @@ Por defecto se conecta a producción (`https://api.asoft.es/api`). Para el backe
 | Variable | Efecto |
 |---|---|
 | `AGEST_API_URL` | Servidor inicial (solo si aún no hay configuración guardada) |
+| `AGEST_BACKUP_UPDATE_URL` | URL alternativa para buscar actualizaciones (pruebas); también activa el actualizador en depuración |
 | `AGEST_BACKUP_NO_BROWSER=1` | No abre el navegador al iniciar sesión; imprime el enlace. La pantalla de espera también tiene *Copiar enlace* |
 
 ### Cómo funciona
@@ -95,6 +102,14 @@ Por defecto se conecta a producción (`https://api.asoft.es/api`). Para el backe
 2. **Latido** cada minuto (`PUT /api/backup-device/heartbeat`): envía la carpeta, el espacio del disco y lo que ocupan las copias, y recibe las tiendas, su programación y las copias pedidas desde el panel.
 3. **Programación**: decide la app con la hora local. Toca copiar si la última copia correcta es anterior a la última franja programada; tras un fallo reintenta a los 30 minutos.
 4. **Copia**: el servidor genera el ZIP, la app lo descarga a `….zip.part` calculando el SHA-256, lo compara con el del servidor, lo renombra y confirma la copia. Después aplica la retención: borra las copias más antiguas de esa tienda y avisa al panel.
+
+5. **Actualizaciones**: lee `https://api.github.com/repos/asoft-sl/agest-backup/releases/latest`. Si la etiqueta (`vX.Y.Z`) es mayor que la versión de `Cargo.toml`, descarga el `agest-backup.exe` de la versión a `agest-backup.exe.new` y exige que su SHA-256 coincida con el que calcula GitHub (`digest` del fichero) o, si no, con el `agest-backup.exe.sha256` adjunto. Para instalar renombra el ejecutable en uso a `.old`, pone el nuevo en su sitio y lo arranca con `--updated` (y `--minimized` si estaba en la bandeja). El `.old` se borra al arrancar. En compilaciones de depuración no se actualiza salvo con `AGEST_BACKUP_UPDATE_URL`.
+
+### Publicar una versión
+
+1. Sube `version` en `Cargo.toml` y compila en *release*.
+2. Crea una *release* en GitHub con la etiqueta `vX.Y.Z` (no marcada como *pre-release*) y adjunta `agest-backup.exe` (con ese nombre exacto) y `agest-backup.exe.sha256`.
+3. Los equipos con la app abierta la instalan solos en las 6 horas siguientes.
 
 ### Estructura
 
@@ -109,6 +124,7 @@ Por defecto se conecta a producción (`https://api.asoft.es/api`). Para el backe
 | `src/store.rs` | Índice local, retención y espacio en disco |
 | `src/app.rs`, `src/theme.rs` | Interfaz y estilo |
 | `src/tray.rs` | Icono de la bandeja |
+| `src/update.rs` | Actualización automática desde las *releases* de GitHub |
 | `src/cli.rs` | Línea de comandos |
 
 ## Datos locales y seguridad

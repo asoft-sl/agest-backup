@@ -21,6 +21,7 @@ use crate::theme::{
     toggle,
 };
 use crate::tray::Tray;
+use crate::update::{self, Phase};
 use crate::worker::{
     Command, Notice, Progress, Shared, SharedRef, Stage, Worker, human_bytes, queued_set,
 };
@@ -209,9 +210,11 @@ impl App {
         let shared = Arc::new(Mutex::new(Shared::default()));
         let tray = crate::tray::create(cc, shared.clone(), config.clone());
         if start_hidden && tray.is_none() {
+            update::WINDOW_HIDDEN.store(false, Ordering::Relaxed);
             cc.egui_ctx
                 .send_viewport_cmd(egui::ViewportCommand::Visible(true));
         }
+        update::start(config.clone(), cc.egui_ctx.clone());
         let api_base = config.lock().unwrap().api_base.clone();
         let server_input = api_base.clone();
         let token = TokenStore::load(&api_base);
@@ -235,6 +238,15 @@ impl App {
         };
         if let Some(token) = token {
             app.start_session(token, &cc.egui_ctx);
+        }
+        if update::JUST_UPDATED.load(Ordering::Relaxed) {
+            app.shared.lock().unwrap().notify(
+                format!(
+                    "AGest Backup se ha actualizado a la versión {}.",
+                    update::CURRENT
+                ),
+                true,
+            );
         }
         app
     }
@@ -555,6 +567,15 @@ impl App {
                 }
 
                 ui.with_layout(Layout::bottom_up(Align::LEFT), |ui| {
+                    if let Phase::Ready { version, .. } = update::status().phase {
+                        ui.add_space(4.0);
+                        self.restart_button(ui, view);
+                        ui.label(small_muted(
+                            ui,
+                            format!("Versión {version} lista para instalar"),
+                        ));
+                        ui.add_space(4.0);
+                    }
                     let (dot, text) = if view.connected {
                         (
                             p.success,
@@ -1119,10 +1140,13 @@ impl App {
         });
         ui.add_space(8.0);
 
+        self.updates_card(ui, view);
+        ui.add_space(8.0);
+
         card(ui, |ui| {
             ui.label(theme::title("Acerca de"));
             theme::field_row(ui, "Versión", |ui| {
-                ui.label(env!("CARGO_PKG_VERSION"));
+                ui.label(update::CURRENT);
             });
             theme::field_row(ui, "Datos de la app", |ui| {
                 let dir = data_dir();
@@ -1131,6 +1155,119 @@ impl App {
                 }
             });
         });
+    }
+
+    fn updates_card(&mut self, ui: &mut Ui, view: &View) {
+        let st = update::status();
+        let mut auto = self.config.lock().unwrap().auto_update;
+        card(ui, |ui| {
+            ui.label(theme::title("Actualizaciones"));
+            if st.phase == Phase::Unsupported {
+                ui.label(muted(
+                    ui,
+                    "Las actualizaciones automáticas solo funcionan con el ejecutable de Windows publicado.",
+                ));
+                return;
+            }
+            ui.horizontal(|ui| {
+                if toggle(ui, &mut auto).changed() {
+                    let mut c = self.config.lock().unwrap();
+                    c.auto_update = auto;
+                    let _ = c.save();
+                }
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    ui.label("Actualizar automáticamente");
+                    ui.label(small_muted(
+                        ui,
+                        "Descarga las versiones nuevas y las instala sola cuando la app está en la bandeja y no hay copias en curso.",
+                    ));
+                });
+            });
+            ui.add_space(6.0);
+            let checked = st
+                .last_check
+                .map(|t| format!(" · comprobado {}", relative(t)))
+                .unwrap_or_default();
+            match &st.phase {
+                Phase::Idle | Phase::Unsupported => {}
+                Phase::Checking => {
+                    ui.label(muted(ui, "Buscando actualizaciones…"));
+                }
+                Phase::UpToDate => {
+                    ui.label(muted(ui, format!("Tienes la última versión{checked}.")));
+                }
+                Phase::Downloading {
+                    version,
+                    done,
+                    total,
+                } => {
+                    ui.label(muted(
+                        ui,
+                        format!(
+                            "Descargando la versión {version}: {} de {}",
+                            human_bytes(*done),
+                            human_bytes(*total)
+                        ),
+                    ));
+                    let fraction = if *total > 0 {
+                        *done as f32 / *total as f32
+                    } else {
+                        0.0
+                    };
+                    theme::progress(ui, fraction, palette(ui).primary);
+                }
+                Phase::Ready { version, .. } => {
+                    alert(
+                        ui,
+                        Tone::Info,
+                        &format!("La versión {version} está descargada y lista para instalar."),
+                    );
+                }
+                Phase::Failed(e) => {
+                    alert(
+                        ui,
+                        Tone::Warning,
+                        &format!("No se ha podido actualizar: {e}"),
+                    );
+                }
+            }
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if let Phase::Ready { url, .. } = &st.phase {
+                    self.restart_button(ui, view);
+                    if ui.link("Novedades").clicked() {
+                        let _ = open::that_detached(url);
+                    }
+                } else {
+                    let busy = matches!(st.phase, Phase::Checking | Phase::Downloading { .. });
+                    if ui
+                        .add_enabled_ui(!busy, |ui| {
+                            button(ui, Kind::Outline, "Buscar actualizaciones")
+                        })
+                        .inner
+                        .clicked()
+                    {
+                        update::check_now();
+                    }
+                }
+            });
+        });
+    }
+
+    /// «Reiniciar y actualizar»: espera a que no haya copias en curso.
+    fn restart_button(&mut self, ui: &mut Ui, view: &View) {
+        let busy = view.current.is_some() || !view.queued.is_empty();
+        let clicked = ui
+            .add_enabled_ui(!busy, |ui| {
+                button(ui, Kind::Primary, "Reiniciar y actualizar")
+            })
+            .inner
+            .on_disabled_hover_text("Espera a que terminen las copias en curso.")
+            .clicked();
+        if clicked && update::install_and_relaunch(false).is_ok() {
+            crate::tray::exit_now();
+        }
     }
 
     fn logout_dialog(&mut self, ctx: &egui::Context) {
@@ -1215,6 +1352,7 @@ impl App {
         if !quitting && keep {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            update::WINDOW_HIDDEN.store(true, Ordering::Relaxed);
             if !self.hid_once {
                 self.hid_once = true;
                 self.shared.lock().unwrap().notify(
@@ -1227,6 +1365,11 @@ impl App {
 }
 
 impl eframe::App for App {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // Una versión ya descargada se instala para el siguiente arranque.
+        update::install_on_exit();
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_login(ctx);
         self.handle_close(ctx);
