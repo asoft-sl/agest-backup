@@ -1,6 +1,6 @@
 [package]
 name = "agest-backup"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "AGest Backup: copias de seguridad de las tiendas de AGest en tu propio equipo"
 authors = ["ASoft SL"]
