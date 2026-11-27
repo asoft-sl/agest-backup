@@ -21,6 +21,8 @@ pub struct Config {
     pub backup_dir: Option<PathBuf>,
     pub start_with_system: bool,
     pub minimize_to_tray: bool,
+    /// Descargar e instalar solas las versiones nuevas.
+    pub auto_update: bool,
     pub device_name: Option<String>,
 }
 
@@ -31,6 +33,7 @@ impl Default for Config {
             backup_dir: None,
             start_with_system: false,
             minimize_to_tray: true,
+            auto_update: true,
             device_name: None,
         }
     }
