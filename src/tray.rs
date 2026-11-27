@@ -159,16 +159,25 @@ thread_local! {
 /// Vuelve a calcular el estado y actualiza icono, tooltip y menú si cambió.
 /// Debe llamarse desde el hilo principal.
 pub fn refresh() {
-    LIVE.with(|live| {
+    let install = LIVE.with(|live| {
         let mut live = live.borrow_mut();
-        let Some(live) = live.as_mut() else { return };
-        let st = {
+        let Some(live) = live.as_mut() else {
+            return false;
+        };
+        let (st, install) = {
             let cfg = live.config.lock().unwrap().clone();
             let s = live.shared.lock().unwrap();
-            status(&s, &cfg, Local::now())
+            let busy = s.current.is_some() || !s.queued.is_empty();
+            (
+                status(&s, &cfg, Local::now()),
+                crate::update::should_auto_install(cfg.auto_update, busy),
+            )
         };
+        if install {
+            return true;
+        }
         if live.shown.as_ref() == Some(&st) {
-            return;
+            return false;
         }
         live.headline.set_text(&st.headline);
         live.last.set_text(&st.last);
@@ -184,7 +193,20 @@ pub fn refresh() {
             }
         }
         live.shown = Some(st);
+        false
     });
+    // Actualización descargada y app en la bandeja sin copias: se instala y
+    // se arranca la versión nueva, también en la bandeja.
+    if install && crate::update::install_and_relaunch(true).is_ok() {
+        exit_now();
+    }
+}
+
+/// Quita el icono de la bandeja (si no, en Windows queda un icono fantasma) y
+/// termina el proceso.
+pub fn exit_now() -> ! {
+    LIVE.with(|live| drop(live.borrow_mut().take()));
+    std::process::exit(0);
 }
 
 pub fn create(
@@ -298,6 +320,7 @@ mod native {
         }
 
         pub fn show(&self, ctx: &egui::Context) {
+            crate::update::WINDOW_HIDDEN.store(false, std::sync::atomic::Ordering::Relaxed);
             if let Some(hwnd) = self.0 {
                 let hwnd = hwnd as HWND;
                 unsafe {
@@ -344,6 +367,7 @@ mod native {
         }
 
         pub fn show(&self, ctx: &egui::Context) {
+            crate::update::WINDOW_HIDDEN.store(false, std::sync::atomic::Ordering::Relaxed);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);

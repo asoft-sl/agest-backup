@@ -10,6 +10,7 @@ mod schedule;
 mod store;
 mod theme;
 mod tray;
+mod update;
 mod worker;
 
 use std::sync::Arc;
@@ -128,7 +129,9 @@ fn main() -> eframe::Result<()> {
     {
         std::process::exit(cli::run(&args));
     }
-    let start_hidden = std::env::args().any(|a| a == "--minimized");
+    update::init(&args);
+    let start_hidden = args.iter().any(|a| a == "--minimized");
+    update::WINDOW_HIDDEN.store(start_hidden, std::sync::atomic::Ordering::Relaxed);
     let (rgba, size) = icon_rgba(64);
 
     let options = eframe::NativeOptions {
