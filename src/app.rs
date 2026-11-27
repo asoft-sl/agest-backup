@@ -829,7 +829,7 @@ impl App {
         theme::page_header(
             ui,
             "Programación",
-            "Cuándo copiar cada tienda. La hora es la de este equipo; si está apagado, la copia se hace al encenderlo. Se sincroniza con el panel web.",
+            "Cuándo se copia cada tienda en este equipo. Los cambios se sincronizan con el panel web.",
         );
         if view.shops.is_empty() {
             card(ui, |ui| {
@@ -837,6 +837,55 @@ impl App {
             });
             return;
         }
+
+        // --- Resumen: cuántas están activas y cuál es la próxima ---
+        let now = Local::now();
+        let active = view
+            .shops
+            .iter()
+            .filter(|(id, _)| view.schedule(*id).enabled)
+            .count();
+        let soonest = view
+            .shops
+            .iter()
+            .filter_map(|(id, name)| next_slot(&view.schedule(*id), now).map(|t| (t, name)))
+            .min_by_key(|(t, _)| *t);
+        card(ui, |ui| {
+            let p = palette(ui);
+            ui.horizontal(|ui| {
+                let tone = if active == 0 {
+                    Tone::Warning
+                } else {
+                    Tone::Success
+                };
+                let (_, fg) = theme::tone_colors(p, tone);
+                ui.label(RichText::new("●").size(10.0).color(fg));
+                ui.label(strong(format!(
+                    "{active} de {} {} con copia automática",
+                    view.shops.len(),
+                    if view.shops.len() == 1 {
+                        "tienda"
+                    } else {
+                        "tiendas"
+                    }
+                )));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| match soonest {
+                    Some((t, name)) => {
+                        ui.label(strong(format!("{name} · {}", upcoming(t))));
+                        ui.label(muted(ui, "Próxima copia:"));
+                    }
+                    None => {
+                        ui.label(muted(ui, "No hay copias programadas"));
+                    }
+                });
+            });
+            ui.label(small_muted(
+                ui,
+                "La hora es la de este equipo. Si está apagado a esa hora, la copia se hace en cuanto se encienda.",
+            ));
+        });
+        ui.add_space(12.0);
+
         for (shop_id, name) in &view.shops {
             let server = view.schedule(*shop_id);
             let draft = self
@@ -846,131 +895,27 @@ impl App {
             let mut save = false;
             let mut discard = false;
             card(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        ui.label(theme::title(name));
-                        ui.label(small_muted(ui, describe(draft)));
-                    });
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        toggle(ui, &mut draft.enabled);
-                        ui.label(muted(ui, "Activa"));
-                    });
-                });
-                ui.add_space(6.0);
-                ui.add_enabled_ui(draft.enabled, |ui| {
-                    egui::Grid::new(("sched", *shop_id))
-                        .num_columns(4)
-                        .spacing([16.0, 10.0])
-                        .show(ui, |ui| {
-                            ui.label(muted(ui, "Frecuencia"));
-                            let freq_label = match draft.frequency.as_str() {
-                                "weekly" => "Semanal",
-                                "monthly" => "Mensual",
-                                _ => "Diaria",
-                            };
-                            egui::ComboBox::from_id_salt(("freq", *shop_id))
-                                .width(150.0)
-                                .selected_text(freq_label)
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(
-                                        &mut draft.frequency,
-                                        "daily".to_string(),
-                                        "Diaria",
-                                    );
-                                    ui.selectable_value(
-                                        &mut draft.frequency,
-                                        "weekly".to_string(),
-                                        "Semanal",
-                                    );
-                                    ui.selectable_value(
-                                        &mut draft.frequency,
-                                        "monthly".to_string(),
-                                        "Mensual",
-                                    );
-                                });
-                            ui.label(muted(ui, "Hora"));
-                            ui.horizontal(|ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut draft.time)
-                                        .desired_width(64.0)
-                                        .hint_text("03:00"),
-                                );
-                                if parse_time(&draft.time).is_none() {
-                                    ui.label(
-                                        RichText::new("HH:MM").size(12.0).color(palette(ui).danger),
-                                    );
-                                }
-                            });
-                            ui.end_row();
-
-                            match draft.frequency.as_str() {
-                                "weekly" => {
-                                    ui.label(muted(ui, "Día"));
-                                    let mut day = draft.weekday.unwrap_or(1);
-                                    egui::ComboBox::from_id_salt(("wd", *shop_id))
-                                        .width(150.0)
-                                        .selected_text(weekday_name(day))
-                                        .show_ui(ui, |ui| {
-                                            for d in 1..=7u8 {
-                                                ui.selectable_value(&mut day, d, weekday_name(d));
-                                            }
-                                        });
-                                    draft.weekday = Some(day);
-                                }
-                                "monthly" => {
-                                    ui.label(muted(ui, "Día del mes"));
-                                    let mut day = draft.month_day.unwrap_or(1);
-                                    egui::ComboBox::from_id_salt(("md", *shop_id))
-                                        .width(150.0)
-                                        .selected_text(day.to_string())
-                                        .show_ui(ui, |ui| {
-                                            for d in 1..=28u8 {
-                                                ui.selectable_value(&mut day, d, d.to_string());
-                                            }
-                                        });
-                                    draft.month_day = Some(day);
-                                }
-                                _ => {
-                                    ui.label("");
-                                    ui.label("");
-                                }
-                            }
-                            ui.label(muted(ui, "Copias a conservar"));
-                            ui.add(
-                                egui::DragValue::new(&mut draft.retention_count)
-                                    .range(1..=365)
-                                    .speed(0.2),
-                            );
-                            ui.end_row();
-                        });
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        toggle(ui, &mut draft.include_files);
-                        ui.vertical(|ui| {
-                            ui.spacing_mut().item_spacing.y = 0.0;
-                            ui.label("Incluir ficheros");
-                            ui.label(small_muted(
-                                ui,
-                                "Imágenes de productos, logos, justificantes y documentos.",
-                            ));
-                        });
-                    });
-                });
+                schedule_header(ui, name, draft, now);
+                if draft.enabled {
+                    ui.add_space(10.0);
+                    divider(ui);
+                    ui.add_space(12.0);
+                    schedule_form(ui, draft);
+                }
                 if !same_schedule(draft, &server) {
-                    ui.add_space(6.0);
+                    ui.add_space(12.0);
+                    divider(ui);
+                    ui.add_space(10.0);
                     ui.horizontal(|ui| {
-                        let valid = parse_time(&draft.time).is_some();
-                        if ui
-                            .add_enabled_ui(valid, |ui| button(ui, Kind::Primary, "Guardar"))
-                            .inner
-                            .clicked()
-                        {
-                            save = true;
-                        }
-                        if button(ui, Kind::Ghost, "Descartar").clicked() {
-                            discard = true;
-                        }
+                        badge(ui, Tone::Warning, "Cambios sin guardar");
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if button(ui, Kind::Primary, "Guardar cambios").clicked() {
+                                save = true;
+                            }
+                            if button(ui, Kind::Ghost, "Descartar").clicked() {
+                                discard = true;
+                            }
+                        });
                     });
                 }
             });
@@ -979,9 +924,7 @@ impl App {
             if save {
                 let mut sc = draft.clone();
                 sc.shop_id = *shop_id;
-                if let Some(t) = parse_time(&sc.time) {
-                    sc.time = t.format("%H:%M").to_string();
-                }
+                sc.time = draft_time(&sc).format("%H:%M").to_string();
                 if sc.frequency != "weekly" {
                     sc.weekday = None;
                 }
@@ -1004,7 +947,7 @@ impl App {
                 // sin cambios pendientes: seguir lo que diga el servidor (p. ej. cambios desde la web)
                 self.drafts.insert(*shop_id, server);
             }
-            ui.add_space(8.0);
+            ui.add_space(10.0);
         }
     }
 
@@ -1773,4 +1716,424 @@ fn logo(ui: &mut Ui, size: f32) {
         Color32::TRANSPARENT,
         Stroke::new(48.0 * k, color),
     ));
+}
+
+// --- Programación ---
+
+/// Ancho de la columna de etiquetas del formulario de programación.
+const FORM_LABEL: f32 = 180.0;
+
+/// Hora del borrador; si el texto no es válido (p. ej. viene así del servidor), 03:00.
+fn draft_time(s: &Schedule) -> chrono::NaiveTime {
+    parse_time(&s.time).unwrap_or_else(|| chrono::NaiveTime::from_hms_opt(3, 0, 0).unwrap())
+}
+
+/// «hoy a las 03:00», «mañana a las 03:00», «el viernes a las 22:30»,
+/// «el 1 de diciembre a las 04:00».
+fn upcoming(t: DateTime<Local>) -> String {
+    use chrono::Datelike;
+    let today = Local::now().date_naive();
+    let date = t.date_naive();
+    let hour = t.format("%H:%M");
+    let days = (date - today).num_days();
+    match days {
+        0 => format!("hoy a las {hour}"),
+        1 => format!("mañana a las {hour}"),
+        2..=6 => format!(
+            "el {} a las {hour}",
+            weekday_name(date.weekday().number_from_monday() as u8).to_lowercase()
+        ),
+        _ => {
+            let label = day_label(date);
+            // «Martes, 1 de diciembre» → «1 de diciembre»
+            let short = label.split_once(", ").map_or(label.as_str(), |(_, d)| d);
+            format!("el {short} a las {hour}")
+        }
+    }
+}
+
+/// Cuánto tiempo de historial cubren `n` copias con esta frecuencia.
+fn retention_span(frequency: &str, n: u32) -> String {
+    let plural = |n: u32, one: &str, many: &str| {
+        if n == 1 {
+            format!("1 {one}")
+        } else {
+            format!("{n} {many}")
+        }
+    };
+    match frequency {
+        "weekly" if n >= 9 => format!("unos {} meses", (n * 7 + 15) / 30),
+        "weekly" => plural(n, "semana", "semanas"),
+        "monthly" if n >= 24 && n.is_multiple_of(12) => format!("{} años", n / 12),
+        "monthly" => plural(n, "mes", "meses"),
+        _ if n >= 60 => format!("unos {} meses", (n + 15) / 30),
+        _ if n >= 14 && n.is_multiple_of(7) => format!("{} semanas", n / 7),
+        _ => plural(n, "día", "días"),
+    }
+}
+
+fn divider(ui: &mut Ui) {
+    let p = palette(ui);
+    let rect = ui.available_rect_before_wrap();
+    let y = ui.cursor().top();
+    ui.painter().hline(
+        rect.left()..=rect.right(),
+        y,
+        Stroke::new(1.0_f32, p.border),
+    );
+    ui.add_space(1.0);
+}
+
+/// Cabecera de la tarjeta: inicial, nombre, resumen y el interruptor.
+fn schedule_header(ui: &mut Ui, name: &str, draft: &mut Schedule, now: DateTime<Local>) {
+    let p = palette(ui);
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::hover());
+        let (bg, fg) = if draft.enabled {
+            theme::tone_colors(p, Tone::Info)
+        } else {
+            theme::tone_colors(p, Tone::Neutral)
+        };
+        ui.painter().rect_filled(rect, CornerRadius::same(8), bg);
+        let initial = name
+            .chars()
+            .find(|c| c.is_alphanumeric())
+            .map(|c| c.to_uppercase().to_string())
+            .unwrap_or_default();
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            initial,
+            theme::semibold_font(17.0),
+            fg,
+        );
+        ui.add_space(4.0);
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.label(theme::title(name));
+            if draft.enabled {
+                let next = next_slot(draft, now)
+                    .map(|t| format!(" · próxima {}", upcoming(t)))
+                    .unwrap_or_default();
+                ui.label(small_muted(ui, format!("{}{next}", describe(draft))));
+            } else {
+                ui.label(small_muted(
+                    ui,
+                    "Sin copia automática. Actívala para elegir cuándo se copia.",
+                ));
+            }
+        });
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            toggle(ui, &mut draft.enabled);
+            ui.label(muted(ui, if draft.enabled { "Activa" } else { "Inactiva" }));
+        });
+    });
+}
+
+/// Fila del formulario: etiqueta (y pista) a la izquierda, control a la derecha.
+fn form_row(ui: &mut Ui, label: &str, hint: &str, add: impl FnOnce(&mut Ui)) {
+    ui.horizontal_top(|ui| {
+        ui.allocate_ui_with_layout(vec2(FORM_LABEL, 0.0), Layout::top_down(Align::LEFT), |ui| {
+            ui.set_width(FORM_LABEL);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.add_space(6.0);
+            ui.label(strong(label));
+            if !hint.is_empty() {
+                ui.label(small_muted(ui, hint));
+            }
+        });
+        ui.vertical(|ui| add(ui));
+    });
+}
+
+fn schedule_form(ui: &mut Ui, draft: &mut Schedule) {
+    let gap = 14.0;
+    form_row(ui, "Frecuencia", "", |ui| {
+        let mut freq = match draft.frequency.as_str() {
+            "weekly" => 1,
+            "monthly" => 2,
+            _ => 0,
+        };
+        if segmented(
+            ui,
+            ("freq", draft.shop_id),
+            &mut freq,
+            &["Cada día", "Cada semana", "Cada mes"],
+        ) {
+            draft.frequency = ["daily", "weekly", "monthly"][freq].to_string();
+        }
+    });
+    ui.add_space(gap);
+
+    match draft.frequency.as_str() {
+        "weekly" => form_row(ui, "Día de la semana", "", |ui| {
+            let mut day = draft.weekday.unwrap_or(1);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                for d in 1..=7u8 {
+                    let letter = ["L", "M", "X", "J", "V", "S", "D"][usize::from(d - 1)];
+                    if day_button(ui, day == d, letter, vec2(36.0, 36.0), true)
+                        .on_hover_text(weekday_name(d))
+                        .clicked()
+                    {
+                        day = d;
+                    }
+                }
+                ui.add_space(6.0);
+                ui.label(muted(ui, weekday_name(day)));
+            });
+            draft.weekday = Some(day);
+        }),
+        "monthly" => form_row(
+            ui,
+            "Día del mes",
+            "Hasta el 28, para que exista en todos los meses.",
+            |ui| {
+                let mut day = draft.month_day.unwrap_or(1);
+                ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                for row in 0..4u8 {
+                    ui.horizontal(|ui| {
+                        for col in 0..7u8 {
+                            let d = row * 7 + col + 1;
+                            if day_button(ui, day == d, &d.to_string(), vec2(36.0, 30.0), false)
+                                .clicked()
+                            {
+                                day = d;
+                            }
+                        }
+                    });
+                }
+                draft.month_day = Some(day);
+            },
+        ),
+        _ => {}
+    }
+    if draft.frequency != "daily" {
+        ui.add_space(gap);
+    }
+
+    form_row(ui, "Hora", "Mejor fuera de horario.", |ui| {
+        use chrono::Timelike;
+        let t = draft_time(draft);
+        let (mut h, mut m) = (t.hour(), t.minute());
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let two = |n: f64, _| format!("{:02}", n as i64);
+            ui.add_sized(
+                [44.0, 32.0],
+                egui::DragValue::new(&mut h)
+                    .range(0..=23)
+                    .speed(0.1)
+                    .custom_formatter(two),
+            )
+            .on_hover_text("Arrastra o haz clic para escribir la hora");
+            ui.label(strong(":"));
+            ui.add_sized(
+                [44.0, 32.0],
+                egui::DragValue::new(&mut m)
+                    .range(0..=59)
+                    .speed(0.2)
+                    .custom_formatter(two),
+            )
+            .on_hover_text("Arrastra o haz clic para escribir los minutos");
+            ui.add_space(12.0);
+            for preset in ["02:00", "03:00", "05:00", "22:00"] {
+                let p = parse_time(preset).unwrap();
+                let selected = p.hour() == h && p.minute() == m;
+                if day_button(ui, selected, preset, vec2(58.0, 28.0), false).clicked() {
+                    (h, m) = (p.hour(), p.minute());
+                }
+            }
+        });
+        // solo si cambia, para no marcar como modificado un «3:00» del servidor
+        if (h, m) != (t.hour(), t.minute()) || parse_time(&draft.time).is_none() {
+            draft.time = format!("{h:02}:{m:02}");
+        }
+    });
+    ui.add_space(gap);
+
+    form_row(ui, "Copias a conservar", "Las antiguas se borran.", |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let n = &mut draft.retention_count;
+            if ui
+                .add_enabled_ui(*n > 1, |ui| {
+                    button_sized(ui, Kind::Outline, "−", vec2(32.0, 32.0))
+                })
+                .inner
+                .clicked()
+            {
+                *n -= 1;
+            }
+            ui.add_sized(
+                [52.0, 32.0],
+                egui::DragValue::new(n).range(1..=365).speed(0.2),
+            );
+            if ui
+                .add_enabled_ui(*n < 365, |ui| {
+                    button_sized(ui, Kind::Outline, "+", vec2(32.0, 32.0))
+                })
+                .inner
+                .clicked()
+            {
+                *n += 1;
+            }
+            ui.add_space(8.0);
+            ui.label(muted(
+                ui,
+                format!("Cubre {}", retention_span(&draft.frequency, *n)),
+            ));
+        });
+    });
+    ui.add_space(gap);
+    form_row(ui, "Ficheros", "", |ui| {
+        ui.horizontal(|ui| {
+            toggle(ui, &mut draft.include_files);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.label("Incluir ficheros");
+                ui.label(small_muted(
+                    ui,
+                    if draft.include_files {
+                        "Imágenes de productos, logos, justificantes y documentos."
+                    } else {
+                        "Solo se copian los datos, sin imágenes ni documentos."
+                    },
+                ));
+            });
+        });
+    });
+}
+
+/// Control segmentado: devuelve `true` si cambia la opción elegida.
+fn segmented(
+    ui: &mut Ui,
+    id: impl std::hash::Hash,
+    selected: &mut usize,
+    options: &[&str],
+) -> bool {
+    let id = ui.make_persistent_id(id);
+    let p = palette(ui);
+    let font = theme::semibold_font(13.0);
+    let widths: Vec<f32> = options
+        .iter()
+        .map(|o| {
+            ui.painter()
+                .layout_no_wrap(o.to_string(), font.clone(), Color32::WHITE)
+                .size()
+                .x
+                + 28.0
+        })
+        .collect();
+    let pad = 3.0;
+    let size = vec2(widths.iter().sum::<f32>() + pad * 2.0, 36.0);
+    let (outer, _) = ui.allocate_exact_size(size, Sense::hover());
+    ui.painter()
+        .rect_filled(outer, CornerRadius::same(8), p.muted);
+    let mut changed = false;
+    let mut x = outer.left() + pad;
+    for (i, (label, w)) in options.iter().zip(&widths).enumerate() {
+        let rect = egui::Rect::from_min_size(
+            egui::pos2(x, outer.top() + pad),
+            vec2(*w, outer.height() - pad * 2.0),
+        );
+        x += w;
+        let response = ui.interact(rect, id.with(i), Sense::click());
+        let on = *selected == i;
+        if on {
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(6), p.card);
+            ui.painter().rect_stroke(
+                rect,
+                CornerRadius::same(6),
+                Stroke::new(1.0_f32, p.border),
+                egui::StrokeKind::Inside,
+            );
+        } else if response.hovered() {
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(6), p.card.gamma_multiply(0.5));
+        }
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            label,
+            font.clone(),
+            if on { p.foreground } else { p.muted_foreground },
+        );
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if response.clicked() && !on {
+            *selected = i;
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Botón seleccionable (días de la semana, del mes y horas rápidas).
+fn day_button(
+    ui: &mut Ui,
+    selected: bool,
+    text: &str,
+    size: egui::Vec2,
+    round: bool,
+) -> egui::Response {
+    let p = palette(ui);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let radius = if round {
+        CornerRadius::same((size.y / 2.0) as u8)
+    } else {
+        CornerRadius::same(6)
+    };
+    let (fill, fg, stroke) = if selected {
+        (p.primary, p.primary_foreground, Stroke::NONE)
+    } else if response.hovered() {
+        (p.muted, p.foreground, Stroke::new(1.0_f32, p.border))
+    } else {
+        (p.card, p.muted_foreground, Stroke::new(1.0_f32, p.border))
+    };
+    ui.painter().rect_filled(rect, radius, fill);
+    ui.painter()
+        .rect_stroke(rect, radius, stroke, egui::StrokeKind::Inside);
+    ui.painter().text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        text,
+        theme::semibold_font(13.0),
+        fg,
+    );
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn historial_cubierto() {
+        assert_eq!(retention_span("daily", 1), "1 día");
+        assert_eq!(retention_span("daily", 10), "10 días");
+        assert_eq!(retention_span("daily", 14), "2 semanas");
+        assert_eq!(retention_span("daily", 90), "unos 3 meses");
+        assert_eq!(retention_span("weekly", 1), "1 semana");
+        assert_eq!(retention_span("weekly", 8), "8 semanas");
+        assert_eq!(retention_span("weekly", 26), "unos 6 meses");
+        assert_eq!(retention_span("monthly", 12), "12 meses");
+        assert_eq!(retention_span("monthly", 24), "2 años");
+    }
+
+    #[test]
+    fn hora_del_borrador() {
+        let mut s = Schedule {
+            time: "22:30".into(),
+            ..Default::default()
+        };
+        assert_eq!(draft_time(&s).format("%H:%M").to_string(), "22:30");
+        s.time = "basura".into();
+        assert_eq!(draft_time(&s).format("%H:%M").to_string(), "03:00");
+    }
 }

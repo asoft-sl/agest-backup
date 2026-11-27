@@ -76,7 +76,7 @@ A small desktop app that runs in the system tray and downloads scheduled, SHA-25
     <td width="50%">
       <picture>
         <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/schedules-dark.png">
-        <img alt="Schedules: frequency, time and retention per shop" src="docs/screenshots/schedules-light.png">
+        <img alt="Schedules: frequency, day, time and retention per shop" src="docs/screenshots/schedules-light.png">
       </picture>
       <p align="center"><b>Schedules</b>: frequency, time, retention and whether to include files.</p>
     </td>
