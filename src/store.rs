@@ -42,7 +42,61 @@ impl Index {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
         index.entries.retain(|e| dir.join(&e.file).is_file());
+        index.discover(dir);
         index
+    }
+
+    /// Añade los ZIP de las carpetas de tienda que no están en el índice
+    /// (índice perdido o copiado de otro equipo), para no "olvidar" copias
+    /// que siguen en disco. Llevan un `run_id` negativo: no son del servidor.
+    fn discover(&mut self, dir: &Path) {
+        let known: std::collections::HashSet<String> =
+            self.entries.iter().map(|e| e.file.clone()).collect();
+        let Ok(folders) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for folder in folders.flatten() {
+            let folder_name = folder.file_name().to_string_lossy().to_string();
+            let Some(shop_id) = parse_shop_folder(&folder_name) else {
+                continue;
+            };
+            if !folder.path().is_dir() {
+                continue;
+            }
+            let Ok(files) = std::fs::read_dir(folder.path()) else {
+                continue;
+            };
+            for file in files.flatten() {
+                let name = file.file_name().to_string_lossy().to_string();
+                if !name.starts_with("agest-") || !name.to_ascii_lowercase().ends_with(".zip") {
+                    continue;
+                }
+                let relative = format!("{folder_name}/{name}");
+                if known.contains(&relative) {
+                    continue;
+                }
+                let Ok(meta) = file.metadata() else { continue };
+                if !meta.is_file() {
+                    continue;
+                }
+                let completed_at = parse_stamp(&name)
+                    .or_else(|| meta.modified().ok().map(DateTime::<Local>::from))
+                    .unwrap_or_else(Local::now);
+                let shop_name = folder_name
+                    .split_once('-')
+                    .map(|(_, slug)| slug.to_string())
+                    .unwrap_or_default();
+                self.entries.push(Entry {
+                    run_id: local_id(&relative),
+                    shop_id,
+                    shop_name,
+                    file: relative,
+                    size: meta.len(),
+                    sha256: String::new(),
+                    completed_at,
+                });
+            }
+        }
     }
 
     pub fn save(&self, dir: &Path) -> Result<()> {
@@ -94,6 +148,36 @@ impl Index {
             .cloned()
             .collect()
     }
+}
+
+/// `12-mi-tienda` → 12.
+fn parse_shop_folder(name: &str) -> Option<i64> {
+    let digits = name.split('-').next()?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// `agest-12-mi-tienda-20261126-030000.zip` → 2026-11-26 03:00:00.
+fn parse_stamp(file: &str) -> Option<DateTime<Local>> {
+    let stem = file.split('.').next()?;
+    let mut parts = stem.rsplitn(3, '-');
+    let time = parts.next()?;
+    let date = parts.next()?;
+    let naive =
+        chrono::NaiveDateTime::parse_from_str(&format!("{date}{time}"), "%Y%m%d%H%M%S").ok()?;
+    naive.and_local_timezone(Local).earliest()
+}
+
+/// Id estable y negativo para una copia que el servidor no conoce.
+fn local_id(relative: &str) -> i64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in relative.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    -((h >> 1) as i64).max(1)
 }
 
 #[cfg(windows)]
@@ -210,6 +294,33 @@ mod tests {
         let loaded = Index::load(dir.path());
         assert_eq!(loaded.entries.len(), 1);
         assert_eq!(loaded.entries[0].run_id, 1);
+    }
+
+    #[test]
+    fn recupera_zips_fuera_del_indice() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("12-mi-tienda")).unwrap();
+        std::fs::write(
+            dir.path().join("12-mi-tienda/agest-12-mi-tienda-20261126-030000.zip"),
+            b"zip",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("12-mi-tienda/otra-cosa.zip"), b"x").unwrap();
+        std::fs::create_dir_all(dir.path().join("fotos")).unwrap();
+        std::fs::write(dir.path().join("fotos/agest-1.zip"), b"x").unwrap();
+        let idx = Index::load(dir.path());
+        assert_eq!(idx.entries.len(), 1);
+        let e = &idx.entries[0];
+        assert_eq!(e.shop_id, 12);
+        assert!(e.run_id < 0);
+        assert_eq!(e.size, 3);
+        assert_eq!(
+            e.completed_at.format("%Y%m%d-%H%M%S").to_string(),
+            "20261126-030000"
+        );
+        // no se duplica si ya estaba indexada
+        idx.save(dir.path()).unwrap();
+        assert_eq!(Index::load(dir.path()).entries.len(), 1);
     }
 
     #[test]

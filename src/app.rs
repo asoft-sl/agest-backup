@@ -81,6 +81,48 @@ struct View {
     disk: Option<(u64, u64)>,
 }
 
+/// Copias del servidor más las que hay en la carpeta y el servidor no lista
+/// para este equipo (p. ej. tras cerrar sesión y volver a entrar, que registra
+/// un dispositivo nuevo), ordenadas de la más reciente a la más antigua.
+fn merged_runs(s: &Shared) -> Vec<Run> {
+    let known: HashSet<i64> = s.runs.iter().map(|r| r.id).collect();
+    let mut runs = s.runs.clone();
+    let extra: Vec<Run> = s
+        .index
+        .entries
+        .iter()
+        .filter(|e| !known.contains(&e.run_id))
+        .map(|e| {
+            let name = s
+                .state
+                .as_ref()
+                .and_then(|st| st.shops.iter().find(|sh| sh.id == e.shop_id))
+                .map(|sh| sh.name.clone())
+                .unwrap_or_else(|| e.shop_name.clone());
+            let file_name = e.file.rsplit('/').next().map(str::to_string);
+            Run {
+                id: e.run_id,
+                shop_id: e.shop_id,
+                shop_name: (!name.is_empty()).then_some(name),
+                trigger: "local".into(),
+                status: "completed".into(),
+                include_files: true,
+                file_name,
+                size_bytes: Some(e.size),
+                sha256: (!e.sha256.is_empty()).then(|| e.sha256.clone()),
+                finished_at: Some(e.completed_at.to_rfc3339()),
+                ..Default::default()
+            }
+        })
+        .collect();
+    if extra.is_empty() {
+        return runs;
+    }
+    runs.extend(extra);
+    runs.sort_by_key(|r| std::cmp::Reverse(run_time(r)));
+    runs
+}
+
 impl View {
     fn from(s: &Shared) -> Self {
         let state = s.state.clone().unwrap_or_default();
@@ -105,7 +147,7 @@ impl View {
             last_error: s.last_error.clone(),
             current: s.current.clone(),
             queued: queued_set(s),
-            runs: s.runs.clone(),
+            runs: merged_runs(s),
             local_runs: s.index.entries.iter().map(|e| e.run_id).collect(),
             last_local: s.index.last_success(),
             local_bytes: s.index.total_bytes(),
@@ -190,6 +232,7 @@ fn trigger_label(trigger: &str) -> &'static str {
         "scheduled" => "Programada",
         "manual" => "Desde el equipo",
         "panel" => "Desde el panel",
+        "local" => "Ya en el equipo",
         _ => "—",
     }
 }
