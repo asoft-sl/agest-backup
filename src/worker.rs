@@ -486,7 +486,9 @@ pub fn prune(api: &ApiClient, dir: &Path, index: &mut Index, shop_id: i64, keep:
         let path = dir.join(&entry.file);
         if !path.exists() || std::fs::remove_file(&path).is_ok() {
             index.entries.retain(|e| e.run_id != entry.run_id);
-            let _ = api.mark_pruned(entry.run_id);
+            if entry.run_id > 0 {
+                let _ = api.mark_pruned(entry.run_id);
+            }
             removed += 1;
         }
     }
